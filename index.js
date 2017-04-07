@@ -3,9 +3,10 @@
 const debug = require('debug')('question-bot');
 const slack = require('slack');
 const storage = require('./lib/storage');
+const config = require('./config.json');
 
-const token = process.env.QUESTION_BOT_SLACK_TOKEN;
-const groupName = process.env.QUESTION_BOT_GROUP_NAME;
+const token = config.slack_token;
+const groupName = config.group_name;
 
 let bot = slack.rtm.client();
 let postTo;
@@ -49,7 +50,7 @@ function handleMessage(message) {
 
   if (message.subtype || message.bot_id) return;
 
-  debug('Saving message...');
+  debug('Handling message...');
   saveMessage(message);
 }
 
