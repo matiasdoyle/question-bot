@@ -1,0 +1,17 @@
+{
+  "name": "question-bot",
+  "version": "0.0.1",
+  "description": "Anonymous question bot for No Isolation",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Matias Doyle <i@matias.io>",
+  "license": "ISC",
+  "dependencies": {
+    "debug": "^2.6.3",
+    "leveldown": "^1.6.0",
+    "levelup": "^1.3.5",
+    "slack": "^8.2.6"
+  }
+}
