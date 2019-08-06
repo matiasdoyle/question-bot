@@ -1,37 +1,39 @@
-'use strict';
-
 const debug = require('debug')('question-bot');
 const slack = require('slack');
+const WebSocket = require('ws');
 const storage = require('./lib/storage');
 const config = require('./config.json');
+
+debug.enabled = true;
 
 const token = config.slack_token;
 const groupName = config.group_name;
 
-let bot = slack.rtm.client();
-let postTo;
-
 setup();
 
-function setup() {
+async function setup() {
   debug(`Starting question-bot posting to ${groupName}`);
+  const bot = await slack.rtm.start({ token });
+  if (!bot.ok) {
+    throw new Error('Could not connect to Slack RTM API');
+  }
 
-  bot.started(data => {
-    bot.self = { id: data.self.id, name: data.self.name };
+  const wss = new WebSocket(bot.url);
 
-    const slackGroup = data.groups.find(g => g.name === groupName);
-    if (!slackGroup) {
-      throw new TypeError(`question-bot is not a member of ${groupName}.`);
+  wss.addListener('message', (message) => {
+    const data = JSON.parse(message);
+    if (data.type === 'hello') {
+      debug('Connected to Slack RTM API');
     }
 
-    postTo = slackGroup.id;
-
-    debug('question-bot initialized!');
-
-    bot.message(data => handleMessage(data));
+    if (data.type !== 'message') return;
+    handleMessage(data);
   });
 
-  bot.listen({ token });
+  wss.addListener('close', (event) => {
+    debug('Got close event', event);
+    process.exit(1);
+  });
 }
 
 function handleMessage(message) {
@@ -39,12 +41,12 @@ function handleMessage(message) {
 
   if (message.subtype === 'message_changed') {
     debug('Updating message...');
-    updateMessage(message.previous_message.ts, message.message);
+    updateMessage(message.previous_message.ts, message.message.text);
     return;
   }
 
   if (message.subtype === 'message_deleted') {
-    // TODO: handle deleted messages
+    updateMessage(message.previous_message.ts, '<Deleted>');
     return;
   }
 
@@ -54,37 +56,34 @@ function handleMessage(message) {
   saveMessage(message);
 }
 
-function saveMessage(message) {
-  isHandled(message, (err, handled) => {
-    if (handled) {
-      debug('Message handled from before');
-      return;
-    }
+async function saveMessage(message) {
+  if (await isHandled(message)) {
+    debug('Message handled from before');
+    return;
+  }
 
-    const msg = {
-      token,
-      channel: postTo,
-      text: 'A new question has been posted:',
-      attachments: [
-        { text: message.text }
-      ],
-      as_user: true // This will post the message as the authenticated bot.
-    };
+  const msg = {
+    token,
+    channel: config.group_name,
+    text: 'A new question has been posted:',
+    attachments: [
+      { text: message.text }
+    ],
+    as_user: true // This will post the message as the authenticated bot.
+  };
 
-    debug(`Posting message to #${groupName}...`);
-    slack.chat.postMessage(msg, (err, data) => {
-      if (err) {
-        debug('Slack posting error', err);
-        return;
-      }
-
-      storage.store(message, data);
-      replyToUser(message);
-    })
-  });
+  debug(`Posting message to #${groupName}...`);
+  try {
+    const data = await slack.chat.postMessage(msg);
+    await storage.store(message, data);
+    await replyToUser(message);
+  } catch (e) {
+    console.error('Slack posting error', e);
+    return;
+  }
 }
 
-function replyToUser(message) {
+async function replyToUser(message) {
   const msg = {
     token,
     channel: message.channel,
@@ -93,38 +92,35 @@ function replyToUser(message) {
   };
 
   debug('Posting reply to user...');
-  slack.chat.postMessage(msg, (err, res) => {
-    if (err) {
-      debug('Slack posting error:', err);
-    }
-  });
+  try {
+    await slack.chat.postMessage(msg);
+  } catch (e) {
+    console.error('Reply to user error', e);
+  }
 }
 
-function updateMessage(ts, message) {
-  storage.read(message.ts, (err, data) => {
-    if (err) throw err;
+async function updateMessage(ts, message) {
+  const data = await storage.read(ts);
 
-    slack.chat.update({
+  try {
+    await slack.chat.update({
       token,
       ts: data.posted_to.ts,
       channel: data.posted_to.channel,
       text: 'A new question has been posted:',
       attachments: [
-        { text: message.text }
+        { text: message }
       ],
       as_user: true
-    }, (err, _data) => console.log(err, _data));
-  });
+    });
+  } catch (e) {
+    console.error('Update message error', e);
+  }
 }
 
-function isHandled(message, callback) {
-  storage.read(message.ts, (err, data) => {
-    if (err) {
-      return callback(err);
-    }
-
-    callback(null, !!data);
-  });
+async function isHandled(message, callback) {
+  const data = await storage.read(message.ts);
+  return !!data;
 }
 
 function isDM(message) {
